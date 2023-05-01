@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Management.Automation;
 using System.Security.Principal;
+using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace XPSThermalTray;
 
@@ -61,21 +63,27 @@ static class Program
 
     private static Image loadingImg = Image.FromFile("assets/loading.gif");
     private static Image checkImg = Image.FromFile("assets/check.png");
+    const string appName = " Dell XPS Thermal Tray";
 
     [STAThread]
     static void Main()
     {
-        const string appName = " Dell XPS Thermal Tray";
         ApplicationConfiguration.Initialize();
         notifyIcon = new NotifyIcon();
-        // notifyIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        notifyIcon.Icon = new Icon("assets/fire.ico");
+        notifyIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        // notifyIcon.Icon = new Icon("assets/fire.ico");
         notifyIcon.Text = appName;
 
         contextMenu = new RoundedContextMenuStrip();
         Font headerFont = new Font("Segoe UI", 10f, FontStyle.Bold);
         contextMenu.Items.Add(appName).Font = headerFont;
-        contextMenu.Items.Add(" Start On Launch", null, OnStartOnLaunchClicked);
+        ToolStripMenuItem startupLaunchMi = new ToolStripMenuItem(" Start On Launch", null, OnStartOnLaunchClicked);
+        using (RegistryKey startupKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false)!)
+        {
+            startupLaunchMi.Image = startupKey.GetValue(Program.appName) != null ? checkImg : null;
+
+        }
+        contextMenu.Items.Add(startupLaunchMi);
         contextMenu.Items.Add(new ToolStripSeparator());
 
 
@@ -100,8 +108,19 @@ static class Program
             Environment.Exit(0);
         }
         updateCurrentProfile();
+        periodicUpdate();
         Application.Run();
 
+    }
+
+    private static async void periodicUpdate()
+    {
+        var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
+
+        while (await timer.WaitForNextTickAsync())
+        {
+            updateCurrentProfile();
+        }
     }
 
     private static bool IsAdministrationRules()
@@ -132,7 +151,6 @@ static class Program
         for (int i = 3; i < 7; i++)
         {
             ToolStripMenuItem menuItem = (contextMenu.Items[i] as ToolStripMenuItem)!;
-            menuItem.Checked = false;
             menuItem.Image = null;
         }
     }
@@ -195,7 +213,23 @@ static class Program
     private static void OnStartOnLaunchClicked(object? sender, EventArgs e)
     {
         ToolStripMenuItem clickedMenuItem = (sender as ToolStripMenuItem)!;
-        clickedMenuItem.Checked = !clickedMenuItem.Checked;
+
+        string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
+        if (exePath == null) return;
+
+        clickedMenuItem.Image = clickedMenuItem.Image == checkImg ? null : checkImg;
+
+        using (RegistryKey startupKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true)!)
+        {
+            if (clickedMenuItem.Image == checkImg)
+            {
+                startupKey.SetValue(Program.appName, exePath);
+            }
+            else
+            {
+                startupKey.DeleteValue(Program.appName, false);
+            }
+        }
     }
 
     private static void OnMenuItemClicked(object? sender, EventArgs e)

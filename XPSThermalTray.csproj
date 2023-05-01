@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets/fire.ico</ApplicationIcon>
-
+    <PublishRelease>true</PublishRelease>
   </PropertyGroup>
 
   <ItemGroup>
