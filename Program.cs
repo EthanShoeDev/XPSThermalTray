@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Management.Automation;
 using System.Security.Principal;
-using System.Collections.ObjectModel;
+
 namespace XPSThermalTray;
 
 
@@ -59,6 +59,8 @@ static class Program
     };
     private static readonly Dictionary<int, ThermalProfile> indexToProfileMap = profileToIndexMap.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 
+    private static Image loadingImg = Image.FromFile("assets/loading.gif");
+    private static Image checkImg = Image.FromFile("assets/check.png");
 
     [STAThread]
     static void Main()
@@ -66,7 +68,8 @@ static class Program
         const string appName = " Dell XPS Thermal Tray";
         ApplicationConfiguration.Initialize();
         notifyIcon = new NotifyIcon();
-        notifyIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        // notifyIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        notifyIcon.Icon = new Icon("assets/fire.ico");
         notifyIcon.Text = appName;
 
         contextMenu = new RoundedContextMenuStrip();
@@ -76,10 +79,10 @@ static class Program
         contextMenu.Items.Add(new ToolStripSeparator());
 
 
-        contextMenu.Items.Add(" ❄️ Cool", null, OnMenuItemClicked);
-        contextMenu.Items.Add(" 📈 Optimized", null, OnMenuItemClicked);
-        contextMenu.Items.Add(" 🔇 Quiet", null, OnMenuItemClicked);
-        contextMenu.Items.Add(" 🔥 Ultra Performance", null, OnMenuItemClicked);
+        contextMenu.Items.Add(" ❄️ Cool", loadingImg, OnMenuItemClicked);
+        contextMenu.Items.Add(" 📈 Optimized", loadingImg, OnMenuItemClicked);
+        contextMenu.Items.Add(" 🔇 Quiet", loadingImg, OnMenuItemClicked);
+        contextMenu.Items.Add(" 🔥 Ultra Performance", loadingImg, OnMenuItemClicked);
 
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add(" Quit", null, (_, _) => Environment.Exit(0));
@@ -96,8 +99,7 @@ static class Program
             MessageBox.Show("Admin access is required. Closing...");
             Environment.Exit(0);
         }
-        var currentProfile = getCurrentThermalProfile();
-        (contextMenu.Items[profileToIndexMap[currentProfile]] as ToolStripMenuItem)!.Checked = true;
+        updateCurrentProfile();
         Application.Run();
 
     }
@@ -117,36 +119,40 @@ static class Program
         }
     }
 
-    private static ThermalProfile getCurrentThermalProfile()
+    private static async void updateCurrentProfile()
+    {
+        var currentProfile = await getCurrentThermalProfileAsync();
+        clearContextMenuImages();
+        (contextMenu.Items[profileToIndexMap[currentProfile]] as ToolStripMenuItem)!.Image = checkImg;
+
+    }
+
+    private static void clearContextMenuImages()
+    {
+        for (int i = 3; i < 7; i++)
+        {
+            ToolStripMenuItem menuItem = (contextMenu.Items[i] as ToolStripMenuItem)!;
+            menuItem.Checked = false;
+            menuItem.Image = null;
+        }
+    }
+
+    private static async Task<ThermalProfile> getCurrentThermalProfileAsync()
     {
         using (PowerShell ps = PowerShell.Create())
         {
-            Func<Collection<PSObject>, Collection<PSObject>> logPS = psObjects =>
-            {
-                if (ps.HadErrors)
-                {
-                    foreach (ErrorRecord error in ps.Streams.Error.ReadAll())
-                    {
-                        Console.WriteLine(error.ToString());
-                    }
-                }
 
-                foreach (var psObject in psObjects)
-                {
-                    Console.WriteLine(psObject.ToString());
-                }
-                ps.Commands.Clear();
-                return psObjects;
-            };
 
-            logPS(ps.AddCommand("Set-ExecutionPolicy")
+            await ps.AddCommand("Set-ExecutionPolicy")
                    .AddParameter("ExecutionPolicy", "RemoteSigned")
                    .AddParameter("Scope", "Process")
-                   .Invoke());
-
-            logPS(ps.AddCommand("Import-Module").AddParameter("Name", "DellBIOSProvider").Invoke());
-            logPS(ps.AddCommand("cd").AddArgument("dellsmbios:").Invoke());
-            var result = logPS(ps.AddCommand("Get-Item").AddArgument(@".\PreEnabled\ThermalManagement").AddCommand("Select-Object").AddParameter("Property", "CurrentValue").Invoke());
+                   .InvokeAsync();
+            ps.Commands.Clear();
+            await ps.AddCommand("Import-Module").AddParameter("Name", "DellBIOSProvider").InvokeAsync();
+            ps.Commands.Clear();
+            await ps.AddCommand("cd").AddArgument("dellsmbios:").InvokeAsync();
+            ps.Commands.Clear();
+            var result = await ps.AddCommand("Get-Item").AddArgument(@".\PreEnabled\ThermalManagement").AddCommand("Select-Object").AddParameter("Property", "CurrentValue").InvokeAsync();
             var resultString = (result[0].Properties["CurrentValue"].Value as string)!;
             if (Enum.TryParse<ThermalProfile>(resultString, out var profile))
             {
@@ -158,37 +164,28 @@ static class Program
             }
         }
     }
-    private static void setCurrentThermalProfile(ThermalProfile profile)
+    private static async void setCurrentThermalProfile(ThermalProfile profile)
     {
         using (PowerShell ps = PowerShell.Create())
         {
-            Func<Collection<PSObject>, Collection<PSObject>> logPS = psObjects =>
-            {
-                if (ps.HadErrors)
-                {
-                    foreach (ErrorRecord error in ps.Streams.Error.ReadAll())
-                    {
-                        Console.WriteLine(error.ToString());
-                    }
-                }
 
-                foreach (var psObject in psObjects)
-                {
-                    Console.WriteLine(psObject.ToString());
-                }
-                ps.Commands.Clear();
-                return psObjects;
-            };
-
-            logPS(ps.AddCommand("Set-ExecutionPolicy")
+            await ps.AddCommand("Set-ExecutionPolicy")
                    .AddParameter("ExecutionPolicy", "RemoteSigned")
                    .AddParameter("Scope", "Process")
-                   .Invoke());
+                   .InvokeAsync();
+            ps.Commands.Clear();
 
-            logPS(ps.AddCommand("Import-Module").AddParameter("Name", "DellBIOSProvider").Invoke());
-            logPS(ps.AddCommand("cd").AddArgument("dellsmbios:").Invoke());
+            await ps.AddCommand("Import-Module").AddParameter("Name", "DellBIOSProvider").InvokeAsync();
+            ps.Commands.Clear();
 
-            logPS(ps.AddCommand("Set-Item").AddArgument(@".\PreEnabled\ThermalManagement").AddArgument(profile.ToString()).Invoke());
+            await ps.AddCommand("cd").AddArgument("dellsmbios:").InvokeAsync();
+            ps.Commands.Clear();
+
+
+            await ps.AddCommand("Set-Item").AddArgument(@".\PreEnabled\ThermalManagement").AddArgument(profile.ToString()).InvokeAsync();
+            clearContextMenuImages();
+            (contextMenu.Items[profileToIndexMap[profile]] as ToolStripMenuItem)!.Image = checkImg;
+
         }
     }
 
@@ -204,15 +201,9 @@ static class Program
     private static void OnMenuItemClicked(object? sender, EventArgs e)
     {
         ToolStripMenuItem clickedMenuItem = (sender as ToolStripMenuItem)!;
-        if (clickedMenuItem.Checked == false)
+        if (clickedMenuItem.Image != checkImg)
         {
-            for (int i = 3; i < 7; i++)
-            {
-                ToolStripMenuItem menuItem = (contextMenu.Items[i] as ToolStripMenuItem)!;
-                menuItem.Checked = false;
-            }
-
-            clickedMenuItem.Checked = true;
+            clickedMenuItem.Image = loadingImg;
             var index = contextMenu.Items.IndexOf(clickedMenuItem);
             var profile = indexToProfileMap[index];
             setCurrentThermalProfile(profile);
@@ -228,3 +219,22 @@ static class Program
         }
     }
 }
+
+
+// Func<Collection<PSObject>, Collection<PSObject>> logPS = psObjects =>
+//             {
+//                 if (ps.HadErrors)
+//                 {
+//                     foreach (ErrorRecord error in ps.Streams.Error.ReadAll())
+//                     {
+//                         Console.WriteLine(error.ToString());
+//                     }
+//                 }
+
+//                 foreach (var psObject in psObjects)
+//                 {
+//                     Console.WriteLine(psObject.ToString());
+//                 }
+//                 ps.Commands.Clear();
+//                 return psObjects;
+//             };
