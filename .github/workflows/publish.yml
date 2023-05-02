@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v1
@@ -22,21 +24,7 @@ jobs:
       - name: Install dotnet version cli
         run: dotnet tool install -g dotnet-version-cli
 
-      - name: Set app version env
-        run: |
-          $AppVer = dotnet version -o json | ConvertFrom-Json | Select-Object -ExpandProperty currentVersion
-          "APP_VER=$AppVer" >> $env:GITHUB_ENV
-          "V_APP_VER=v$AppVer" >> $env:GITHUB_ENV
-          "RELEASE_NAME=Release $AppVer" >> $env:GITHUB_ENV
-
-      - name: Restore Packages
-        run: dotnet restore
-
-      - name: Build Release
-        run: dotnet publish
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v2
+      - uses: salsify/action-detect-and-tag-new-version@v2
         with:
-          name: XPSThermalTray
-          path: bin\Release\net7.0-windows\win-x64\publish
+          version-command: |
+            dotnet version -o json | ConvertFrom-Json | Select-Object -ExpandProperty currentVersion
