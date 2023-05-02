@@ -12,7 +12,7 @@
     <PublishRelease>true</PublishRelease>
     <!-- <PublishSingleFile>true</PublishSingleFile> -->
     <SelfContained>true</SelfContained>
-    <Version>0.0.2</Version>
+    <Version>0.0.3</Version>
   </PropertyGroup>
 
   <ItemGroup>
