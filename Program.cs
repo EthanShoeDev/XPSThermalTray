@@ -1,8 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Management.Automation;
 using System.Security.Principal;
-using System.Diagnostics;
-using Microsoft.Win32;
+using Microsoft.Win32.TaskScheduler;
 
 namespace XPSThermalTray;
 
@@ -61,31 +60,41 @@ static class Program
     };
     private static readonly Dictionary<int, ThermalProfile> indexToProfileMap = profileToIndexMap.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 
-    private static Image loadingImg = Image.FromFile("assets/loading.gif");
-    private static Image checkImg = Image.FromFile("assets/check.png");
-    const string appName = " Dell XPS Thermal Tray";
+    private static string appPath = Application.ExecutablePath;
+    private static string assetsPath = Path.Combine(Application.StartupPath, "assets");
+    private static Image loadingImg = Image.FromFile(Path.Combine(assetsPath, "loading.gif"));
+    private static Image checkImg = Image.FromFile(Path.Combine(assetsPath, "check.png"));
+
+    const string appName = "Dell XPS Thermal Tray";
 
     [STAThread]
     static void Main()
     {
+        AppDomain? currentDomain = default(AppDomain);
+        currentDomain = AppDomain.CurrentDomain;
+        currentDomain.UnhandledException += GlobalUnhandledExceptionHandler;
+        System.Windows.Forms.Application.ThreadException += GlobalThreadExceptionHandler;
+
         ApplicationConfiguration.Initialize();
+
         notifyIcon = new NotifyIcon();
-        notifyIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        // notifyIcon.Icon = new Icon("assets/fire.ico");
+        notifyIcon.Icon = new Icon(Path.Combine(assetsPath, "fire.ico"));
         notifyIcon.Text = appName;
 
         contextMenu = new RoundedContextMenuStrip();
         Font headerFont = new Font("Segoe UI", 10f, FontStyle.Bold);
-        contextMenu.Items.Add(appName).Font = headerFont;
+        contextMenu.Items.Add(" " + appName).Font = headerFont;
+
         ToolStripMenuItem startupLaunchMi = new ToolStripMenuItem(" Start On Launch", null, OnStartOnLaunchClicked);
-        using (RegistryKey startupKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false)!)
+        using (TaskService ts = new TaskService())
         {
-            startupLaunchMi.Image = startupKey.GetValue(Program.appName) != null ? checkImg : null;
+            var existingTask = ts.GetTask(appName);
+            startupLaunchMi.Image = existingTask != null && existingTask.Enabled ? checkImg : null;
 
         }
         contextMenu.Items.Add(startupLaunchMi);
-        contextMenu.Items.Add(new ToolStripSeparator());
 
+        contextMenu.Items.Add(new ToolStripSeparator());
 
         contextMenu.Items.Add(" ❄️ Cool", loadingImg, OnMenuItemClicked);
         contextMenu.Items.Add(" 📈 Optimized", loadingImg, OnMenuItemClicked);
@@ -93,30 +102,30 @@ static class Program
         contextMenu.Items.Add(" 🔥 Ultra Performance", loadingImg, OnMenuItemClicked);
 
         contextMenu.Items.Add(new ToolStripSeparator());
+
         contextMenu.Items.Add(" Quit", null, (_, _) => Environment.Exit(0));
-
-
 
         contextMenu.Closing += ContextMenuStrip_Closing;
         notifyIcon.ContextMenuStrip = contextMenu;
         notifyIcon.Visible = true;
+
         var hasAdminAccess = IsAdministrationRules();
         Console.WriteLine("Has admin access: " + hasAdminAccess);
+
         if (!hasAdminAccess)
         {
             MessageBox.Show("Admin access is required. Closing...");
             Environment.Exit(0);
         }
+
         updateCurrentProfile();
         periodicUpdate();
         Application.Run();
-
     }
 
     private static async void periodicUpdate()
     {
         var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
-
         while (await timer.WaitForNextTickAsync())
         {
             updateCurrentProfile();
@@ -143,7 +152,6 @@ static class Program
         var currentProfile = await getCurrentThermalProfileAsync();
         clearContextMenuImages();
         (contextMenu.Items[profileToIndexMap[currentProfile]] as ToolStripMenuItem)!.Image = checkImg;
-
     }
 
     private static void clearContextMenuImages()
@@ -159,17 +167,18 @@ static class Program
     {
         using (PowerShell ps = PowerShell.Create())
         {
-
-
             await ps.AddCommand("Set-ExecutionPolicy")
                    .AddParameter("ExecutionPolicy", "RemoteSigned")
                    .AddParameter("Scope", "Process")
                    .InvokeAsync();
             ps.Commands.Clear();
+
             await ps.AddCommand("Import-Module").AddParameter("Name", "DellBIOSProvider").InvokeAsync();
             ps.Commands.Clear();
+
             await ps.AddCommand("cd").AddArgument("dellsmbios:").InvokeAsync();
             ps.Commands.Clear();
+
             var result = await ps.AddCommand("Get-Item").AddArgument(@".\PreEnabled\ThermalManagement").AddCommand("Select-Object").AddParameter("Property", "CurrentValue").InvokeAsync();
             var resultString = (result[0].Properties["CurrentValue"].Value as string)!;
             if (Enum.TryParse<ThermalProfile>(resultString, out var profile))
@@ -186,7 +195,6 @@ static class Program
     {
         using (PowerShell ps = PowerShell.Create())
         {
-
             await ps.AddCommand("Set-ExecutionPolicy")
                    .AddParameter("ExecutionPolicy", "RemoteSigned")
                    .AddParameter("Scope", "Process")
@@ -213,21 +221,28 @@ static class Program
     private static void OnStartOnLaunchClicked(object? sender, EventArgs e)
     {
         ToolStripMenuItem clickedMenuItem = (sender as ToolStripMenuItem)!;
-
-        string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
-        if (exePath == null) return;
-
         clickedMenuItem.Image = clickedMenuItem.Image == checkImg ? null : checkImg;
 
-        using (RegistryKey startupKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true)!)
+        using (TaskService ts = new TaskService())
         {
-            if (clickedMenuItem.Image == checkImg)
+            var existingTask = ts.GetTask(appName);
+
+            if (existingTask != null && clickedMenuItem.Image != checkImg)
             {
-                startupKey.SetValue(Program.appName, exePath);
+                ts.RootFolder.DeleteTask(appName);
+                return;
             }
-            else
+
+            if (clickedMenuItem.Image == checkImg && existingTask == null)
             {
-                startupKey.DeleteValue(Program.appName, false);
+                TaskDefinition td = ts.NewTask();
+
+                td.RegistrationInfo.Description = $"Launch {appName} at startup.";
+                td.Principal.RunLevel = TaskRunLevel.Highest;
+                td.Triggers.Add(new LogonTrigger { UserId = System.Security.Principal.WindowsIdentity.GetCurrent().Name });
+                td.Actions.Add(new ExecAction(appPath));
+
+                ts.RootFolder.RegisterTaskDefinition(appName, td);
             }
         }
     }
@@ -252,23 +267,20 @@ static class Program
             e.Cancel = true;
         }
     }
+
+    private static void GlobalUnhandledExceptionHandler(object sender, UnhandledExceptionEventArgs e)
+    {
+        Exception? ex = default(Exception);
+        ex = (Exception)e.ExceptionObject;
+        string crashLog = $"[Unhandled Exception] {DateTime.Now}\n\n{ex.ToString()}\n\n";
+        File.AppendAllText(Path.Combine(assetsPath, "crash.log"), crashLog);
+    }
+
+    private static void GlobalThreadExceptionHandler(object sender, System.Threading.ThreadExceptionEventArgs e)
+    {
+        Exception? ex = default(Exception);
+        ex = e.Exception;
+        string crashLog = $"[Thread Exception] {DateTime.Now}\n\n{ex.ToString()}\n\n";
+        File.AppendAllText(Path.Combine(assetsPath, "crash.log"), crashLog);
+    }
 }
-
-
-// Func<Collection<PSObject>, Collection<PSObject>> logPS = psObjects =>
-//             {
-//                 if (ps.HadErrors)
-//                 {
-//                     foreach (ErrorRecord error in ps.Streams.Error.ReadAll())
-//                     {
-//                         Console.WriteLine(error.ToString());
-//                     }
-//                 }
-
-//                 foreach (var psObject in psObjects)
-//                 {
-//                     Console.WriteLine(psObject.ToString());
-//                 }
-//                 ps.Commands.Clear();
-//                 return psObjects;
-//             };
