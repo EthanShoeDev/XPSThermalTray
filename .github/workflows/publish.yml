@@ -31,4 +31,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: XPSThermalTray
-          path: bin\Release\net7.0-windows\win-x64\publish\
+          path: bin/Release/net7.0-windows/win-x64/publish/
