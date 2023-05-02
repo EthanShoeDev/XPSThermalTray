@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           fetch-depth: 2
 
@@ -25,6 +25,22 @@ jobs:
         run: dotnet tool install -g dotnet-version-cli
 
       - uses: salsify/action-detect-and-tag-new-version@v2
+        id: ver
         with:
           version-command: |
-            dotnet version -o json | ConvertFrom-Json | Select-Object -ExpandProperty currentVersion
+            powershell.exe -command "dotnet version -o json | ConvertFrom-Json | Select-Object -ExpandProperty currentVersion"
+
+      - name: Restore Packages
+        if: ${{ steps.ver.outputs.previous-version != steps.ver.outputs.current-version }}
+        run: dotnet restore
+
+      - name: Build Release
+        if: ${{ steps.ver.outputs.previous-version != steps.ver.outputs.current-version }}
+        run: dotnet publish
+
+      - name: Upload Artifact
+        if: ${{ steps.ver.outputs.previous-version != steps.ver.outputs.current-version }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: XPSThermalTray
+          path: bin\Release\net7.0-windows\win-x64\publish\
